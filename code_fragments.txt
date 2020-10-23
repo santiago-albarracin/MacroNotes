@@ -1,0 +1,248 @@
+
+% Fragments of code to implement main modifications. Note that other adjustments of the main code are needed.
+% The aim of this file is to provide some guidance. 
+
+% Policy function iteration on first order condition ---------------------------------------------------
+
+% The code in this section needs to be fixed. In general, I suggest to use value function iteration (easy to code and faster to run) or at least to PFI over the Euler equation (not over FOC and envelope condition separately). 
+
+%--------------------------------------------------------------------------
+% Finite horizon, policy function iteration on FOC
+%--------------------------------------------------------------------------
+
+clear; close all; clc; 
+
+%% Parameters
+
+global beta gamma R 
+global I J T xx z P epsilon
+
+R = 1.045; 
+rho = .05; 
+beta = 1/(1+rho); 
+gamma = 2; 
+phi = 0; 
+
+I = 20; 
+J = 2; 
+T = 3; 
+
+%% Grids
+
+% two-state markov process
+z = [0.5; 1.5];
+P0 = [.5;.5]; 
+P = [.6, .4; .4, .6]; 
+
+% cash on hand constant grid 
+epsilon = 1e-2; % small consumption 
+xmin = - phi/R + epsilon; 
+xmax = 100; 
+x = linspace(xmin,xmax,I)'; 
+
+zz = repmat(z',I,1);
+xx = repmat(x,1,J); 
+
+%% Solve agent optimization by policy function iteration 
+
+% preallocation
+c = zeros(I,J,T);
+s = zeros (I,J,T); 
+a = zeros(I,J,T); 
+v = zeros(I,J,T);
+vxp = zeros(I,J,T);
+
+% final period consumption, asset holdings, value including derivative
+c(:,:,T) = xx;
+a(:,:,T)= (xx - zz)/R;
+v(:,:,T) = u(c(:,:,T));
+vxp(:,:,T) = uc(c(:,:,T));
+
+plot(x,v(:,:,T));
+
+tic
+% Iterate Backwards
+for t = T-1:-1:1
+
+% I*J Euler equations
+Euler = @(gc) uc(gc) - beta*R*EVxp(gc,vxp(:,:,t+1));  
+
+% consumption (fsolve inner loop)
+c0 = xx(:); 
+optcons = fsolve(Euler,c0); % optimset('Display','off')
+c(:,:,t) = reshape(optcons,I,J); 
+    
+for i = 1:I
+for j = 1:J    
+% binding borrowing constraint whenever s = x - c <= -phi/R
+if c(i,j,t) >= xx(i,j) + phi/R
+c(i,j,t) = xx(i,j) + phi/R; 
+else 
+c(i,j,t) = max(epsilon,c(i,j,t));     
+end
+end
+end
+
+% compute saving and assets
+s(:,:,t) = x - c(:,:,t);
+a(:,:,t) = R*s(:,:,t); 
+
+% update value and derivative 
+v(:,:,t) = u(c(:,:,t)) + beta*EV(c(:,:,t),v(:,:,t+1)); 
+vxp(:,:,t) = uc(c(:,:,t)); 
+disp('It == '); 
+disp(T-t); 
+end
+toc
+
+%% Functions
+
+function [u] = u(x)
+global gamma
+u = (x.^(1-gamma))./(1-gamma); 
+end
+
+function [uc] = uc(x)
+global gamma
+uc = x.^(-gamma); 
+end
+
+function [yy] = EVxp(gc,vxp)
+% given a consumption guess and v_{x',t+1} compute E(v_{x',t+1}(x',z'))
+global I J xx z P R
+
+gc = reshape(gc,I,J); 
+
+% preallocation 
+xp = zeros(I,J,J); 
+vvv = zeros(I,J,J); 
+yy = zeros(I,J); 
+
+for i = 1:I
+for j = 1:J
+for q = 1:J
+xp(i,j,q) = R*(xx(i,j) - gc(i,j)) + z(q);
+if (xp(i,j,q) < xx(1,q)) % if x' is out of bounds simply set it to xmin 
+vvv(i,j,q) = vxp(1,q);
+disp('warning: xp out of bounds');
+elseif (xp(i,j,q) > xx(I,q)) % if x' is out of bounds simply set it to decision at xmax 
+vvv(i,j,q) = vxp(I,q);     
+else
+vvv(i,j,q) = interp1(xx(:,q),vxp(:,q),xp(i,j,q));  
+end
+vv = reshape(vvv(i,j,:),1,J);
+yy(i,j) = sum(P(j,:).*vv); 
+end
+end
+end
+
+yy = yy(:); 
+
+end
+
+function [yy] = EV(gc,vT)
+% given v_{t+1} compute E(v_{t+1}(x',z'))
+% if x' is out of bounds simply set it to decision at xmax or xmin
+global I J xx z P R epsilon
+
+% preallocation 
+xp = zeros(I,J,J); 
+vvv = zeros(I,J,J); 
+yy = zeros(I,J); 
+
+for i = 1:I
+for j = 1:J
+for q = 1:J
+xp(i,j,q) = R*(xx(i,j) - gc(i,j)) + z(q);
+if (xp(i,j,q) + epsilon < xx(1,q)); disp('warning: xp out of bounds'); end
+if (xp(i,j,q) < xx(1,q))
+% extrapolation
+m = (vT(2,q) - vT(1,q))/(xx(2,q) - xx(1,q));
+vvv(i,j,q) = vT(1,q) + m*(xp(i,j,q) - xx(1,q));
+elseif (xp(i,j,q) > xx(I,q))
+% extrapolation
+m = (vT(I,q) - vT(I-1,q))/(xx(2,q) - xx(I-1,q));
+vvv(i,j,q) = vT(I-1,q) + m*(xp(i,j,q) - xx(I-1,q));    
+else
+% interpolation 
+vvv(i,j,q) = interp1(xx(:,q),vT(:,q),xp(i,j,q));  
+end
+vv = reshape(vvv(i,j,:),1,J);
+yy(i,j) = sum(P(j,:).*vv); 
+end
+end
+end
+end
+
+%% speed up distribution computations -----------------------------------------------
+
+for jc=2:nj
+for xc=1:nx
+frac_jcm1 = sum(Phi(jc-1,:,xc));
+if (frac_jcm1==0)
+continue
+end
+
+for yc=1:ny
+frac_jcm1 = Phi(jc-1,yc,xc);
+for ycc=1:ny
+
+% income (wages and pensions) in current period/age:
+inc=epsi(jc)*netw*gridy(ycc)+(1-epsi(jc))*pens;
+% cash on hand: x=a*(1+r)+y = s(-1)*(1+r)+y;
+cah=inc+(1.0+r)*gridsav(xc);
+[vals,inds]=basefun(gridx(jc,ycc,:),cah,nx);
+
+for ic=1:2
+TT = vals(ic)*pi(yc,ycc);
+frac_jc = frac_jcm1 * TT * sr(jc-1);
+Phi(jc,ycc,inds(ic))=Phi(jc,ycc,inds(ic))+frac_jc;
+end;
+end;
+end;
+end;
+end
+
+%% Income profile ----------------------------------------------------
+
+% read text file with data in matlab
+Avec = (25:65)'; 
+fileID = fopen('inc_coup.txt','r');
+formatSpec = '%d %f'; 
+yhat = fscanf(fileID,formatSpec); 
+ydet = zeros(41,1);
+for i = 1:41
+ydet(i) = yhat(i) + yhat(i+1);
+end
+
+% normalize
+yprofile = ydet/ydet(1);
+
+% extrapolate
+yext = interp1(Avec,yprofile,[20:24],'linear','extrap');
+yprofile = [yext'; yprofile];
+
+% plot
+scatter([(20:24)'; Avec],yprofile);
+
+%% Calibrate shocks ---------------------------------------------------
+
+ny = 2;        
+
+% transition probability and variance
+rho = 0.93;
+var_nu = .062; 
+varepsilon = .194
+vary = var_vu/(1-rho^2) + varepsilon;
+kappa = rho*(1 + .194/vary)^(-1);    
+        
+% Markov chain (use this only for pi, pini)
+[pini,pi,gridy]=mchain(kappa,sqrt(vary));
+
+% use eta for gridy
+epsil = sqrt(vary); 
+eta_minus = (2*exp(1 - epsil))/(exp(1 - epsil) + exp(1 + epsil));
+eta_minus = (2*exp(1 + epsil))/(exp(1 - epsil) + exp(1 + epsil));
+
+
+
